@@ -6,8 +6,11 @@ Based on ```http.server```.
 There is no authorization here, so anyone who can see your device can also download/upload files.  
 You can specify server mode: allow only download or only upload (see [arguments](#arguments)).
 
+### Installation
+    python3 setup.py install
+
 ### Usage
-    python3 __main__.py
+    ezshare
 
 then open ```<local-ip>:<port>``` from other device.
 
