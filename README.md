@@ -1,5 +1,7 @@
 # ezshare
-Easy way to share files through net.
+Easy way to share files through net.  
+You need to run this only on the *server* side. Any browser can be a *client*.
+
 Based on ```http.server```.
 
 ### **WARNING**
