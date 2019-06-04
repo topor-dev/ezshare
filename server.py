@@ -5,37 +5,10 @@ from functools import partial
 from http import server
 from http.server import HTTPStatus
 from io import BytesIO
+from types import MethodType
+from unittest import mock
 
-
-class MethodDisabler:
-    def empty_method(*args, **kwargs):
-        pass
-
-    def __init__(self, owner, method):
-        self.owner = owner
-        self.method = method
-
-    def disable(self):
-        if not hasattr(self, '_disabled'):
-            self._disabled = False
-        if self._disabled:
-            return
-        self._disabled = True
-        self.orig = getattr(self.owner, self.method)
-        setattr(self.owner, self.method, MethodDisabler.empty_method)
-
-    def enable(self):
-        if not self._disabled:
-            return
-        self._disabled = False
-        setattr(self.owner, self.method, self.orig)
-
-    def __enter__(self):
-        self.disable()
-        return self
-
-    def __exit__(self, a, b, c):
-        self.enable()
+DEFAULT_CODEPAGE = 'utf-8'
 
 
 class Const:
@@ -44,7 +17,7 @@ class Const:
     html_upload_form = '''\
 <!DOCTYPE html><html>
 <title>Upload file</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name='viewport' content='width=device-width, initial-scale=1'>
 <body>
     <form action="{url}"" method="post" enctype="multipart/form-data">
         <input type="file" name="file"/>
@@ -70,7 +43,8 @@ def _send_upload_form_head(handler):
 def send_head_and_inject_upload_link(handler):
     self = handler
     f = None
-    with MethodDisabler(server.SimpleHTTPRequestHandler, 'end_headers'):
+    with mock.patch('http.server.SimpleHTTPRequestHandler.end_headers'):
+        # with MethodDisabler(server.SimpleHTTPRequestHandler, 'end_headers'):
         f = self.send_head()
         if not f:
             return f
@@ -97,11 +71,6 @@ def send_head_and_inject_upload_link(handler):
 
 
 class ShareAndUploadHTTPRequestHandler(server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, directory=None, **kwargs):
-        if directory is None:
-            raise ValueError(directory)
-        super().__init__(*args, directory=directory, **kwargs)
-
     def do_HEAD(self):
         f = self._send_head_with_inject()
         if f:
@@ -132,8 +101,14 @@ class ShareAndUploadHTTPRequestHandler(server.SimpleHTTPRequestHandler):
         return False
 
     def do_POST(self):  # upload file
-        is_success = self.process_file_upload()
+        is_success, error = self.process_file_upload()
         if not is_success:
+            self.send_response(HTTPStatus.BAD_REQUEST)
+            self.send_header(
+                'Content-type', 'text/plain; charset=%s' % DEFAULT_CODEPAGE
+            )
+            self.end_headers()
+            self.wfile.write(error.encode())
             return
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header('Location', '/')
@@ -142,22 +117,22 @@ class ShareAndUploadHTTPRequestHandler(server.SimpleHTTPRequestHandler):
     def process_file_upload(self):
         content_type = self.headers['content-type']
         if not content_type:
-            return self._fail()
+            return (False, 'Content-type not found')
         if not '=' in content_type:
-            return self._fail()
+            return (False, 'Boundary not in content-type')
         boundary = content_type.split('=')[1].encode()
         remainbytes = int(self.headers['content-length'])
         line = self.rfile.readline()
         remainbytes -= len(line)
         if not boundary in line:
-            return self._fail()
+            return (False, 'file data not start with boundary')
         line = self.rfile.readline()
         remainbytes -= len(line)
         fn = re.findall(
             r'Content-Disposition.*name="file"; filename="(.*)"', line.decode()
         )
         if not fn:
-            return self._fail()
+            return (False, 'Content-Disposition wrong')
         file_name = fn[0]
         file_path = self.next_non_existing_file_path(file_name)
 
@@ -175,14 +150,15 @@ class ShareAndUploadHTTPRequestHandler(server.SimpleHTTPRequestHandler):
                     if prevline.endswith(b'\r'):
                         prevline = prevline[:-1]
                     file.write(prevline)
-                    return True
+                    return (True, None)
                 else:
                     file.write(prevline)
                     prevline = line
-        return self._fail()
+        return (False, 'Error reading file data')
 
     def next_non_existing_file_path(self, file_name):
-        fname = os.path.join(self.directory, file_name)
+        # getcwd mocked, returns root directory
+        fname = os.path.join(os.getcwd(), file_name)
         if not os.path.exists(fname):
             return fname
         counter = 1
@@ -208,15 +184,25 @@ class UploadOnlyHttpRequestHandler(ShareAndUploadHTTPRequestHandler):
 
 
 def serve(share_only, upload_only, port, directory):
+    directory = str(directory)
     handler = None
     if share_only:
-        handler = partial(server.SimpleHTTPRequestHandler, directory=str(directory))
+        handler = server.SimpleHTTPRequestHandler
     elif upload_only:
-        handler = partial(UploadOnlyHttpRequestHandler, directory=str(directory))
+        handler = UploadOnlyHttpRequestHandler
     else:
-        handler = partial(ShareAndUploadHTTPRequestHandler, directory=str(directory))
+        handler = ShareAndUploadHTTPRequestHandler
 
     server_address = ('', port)
 
-    with server.ThreadingHTTPServer(server_address, handler) as httpd:
+    try:  # python = 3.7
+        ServerClass = server.ThreadingHTTPServer
+    except AttributeError:  # python < 3.7
+        ServerClass = server.HTTPServer
+        ServerClass.__enter__ = lambda self: self
+        ServerClass.__exit__ = lambda self, *args: self.server_close()
+
+    with ServerClass(server_address, handler) as httpd, mock.patch(
+        'os.getcwd', new=lambda: directory
+    ):
         httpd.serve_forever()

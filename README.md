@@ -25,3 +25,6 @@ ezshare [-h] [--share-only | --upload-only] [--port n] [path]
     --share-only, -s   disable upload function
     --upload-only, -u  disable share function
     --port n, -p n     Specify alternate port [default: 8000]
+
+### Supported version
+Tested under python3.5, python3.7
