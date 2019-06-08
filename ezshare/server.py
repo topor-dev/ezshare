@@ -64,6 +64,7 @@ def send_head_and_inject_upload_link(handler):
                 del self._headers_buffer[i]
         self.send_header('Content-Length', str(len(encoded)))
         f.seek(0)
+        print(f, type(f))
         f.write(encoded)
         f.seek(0)
     self.end_headers()
@@ -84,12 +85,25 @@ class ShareAndUploadHTTPRequestHandler(server.SimpleHTTPRequestHandler):
             finally:
                 f.close()
 
+    def _is_returns_file(self):
+        """\
+        check if path is a file, or
+        if path is directory and contains index.htm[l]
+        """
+        file_path = self.translate_path(self.path)
+        if not os.path.isdir(file_path):
+            return True
+        for file in "index.html", "index.htm":
+            if os.path.exists(os.path.join(file_path, file)):
+                return True
+        return False
+
     def _send_head_with_inject(self):
         f = None
         if self.path == Const.upload_url:
             f = _send_upload_form_head(self)
         else:
-            if not os.path.isdir(self.translate_path(self.path)):
+            if self._is_returns_file():
                 return super().do_GET()
             # else - directory - have to inject link
             f = send_head_and_inject_upload_link(self)
